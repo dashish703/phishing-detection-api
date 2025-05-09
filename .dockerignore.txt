@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+.env
+myenv/
+*.db
+*.sqlite3
+*.log
+.DS_Store
+.vscode/
+.idea/
+Phishing_data.json
