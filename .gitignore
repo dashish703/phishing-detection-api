@@ -1,0 +1,12 @@
+# Ignore virtual environment and cache
+myenv/
+__pycache__/
+*.pyc
+
+# Ignore data/model/binaries
+*.json
+*.pkl
+*.dll
+*.exe
+*.pyd
+*.lib

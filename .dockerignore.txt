@@ -1,14 +1,29 @@
+# Ignore Python bytecode files
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Ignore swap files from text editors (e.g., Vim)
 *.swp
+
+# Ignore environment files
 .env
 myenv/
+
+# Ignore database files
 *.db
 *.sqlite3
+
+# Ignore log files
 *.log
+
+# Ignore system-specific files
 .DS_Store
+
+# Ignore editor configuration files
 .vscode/
 .idea/
+
+# Ignore specific project files
 Phishing_data.json

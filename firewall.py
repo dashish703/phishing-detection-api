@@ -43,6 +43,17 @@ class Firewall:
             for entry in logs[-5:]:  # Show last 5 attempts
                 print(entry)
 
+    def get_recent_attempts(self, count=5):
+        """
+        Returns recent phishing detection attempts.
+        """
+        if not os.path.exists(self.log_file):
+            return []
+
+        with open(self.log_file, "r") as file:
+            logs = json.load(file)
+            return logs[-count:]
+
 # Example usage:
 if __name__ == "__main__":
     firewall = Firewall()
