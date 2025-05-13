@@ -9,14 +9,8 @@ from flask_cors import CORS
 from urllib.parse import urlparse
 from transformers import DistilBertTokenizer, DistilBertModel
 from google.cloud import storage
-from google.auth import credentials
-from google.auth.transport.requests import Request
-from google.auth import exceptions
 from firewall import Firewall  # ✅ Your custom module
 
-# --- Set up GCP Authentication ---
-# Provide the path to your service account key file for GCP authentication
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\DEV Verma\PycharmProjects\Phishing_Detection\phishing-detection-450717-d4e0eb9c35e4.json"
 
 # --- GCS Model Downloader ---
 def download_model_from_gcs(bucket_name, blob_name):
@@ -30,6 +24,7 @@ def download_model_from_gcs(bucket_name, blob_name):
         return tmp_file.name
     except Exception as e:
         raise RuntimeError(f"Error downloading model from GCS: {e}")
+
 
 # --- Initialize BERT ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -53,40 +48,32 @@ except Exception as e:
 # ✅ Initialize Firewall
 firewall = Firewall()
 
-# --- Embedding Function ---
-def get_bert_embedding(text):
+
+# --- Fetch Email Stats ---
+@app.route('/dashboard', methods=['GET'])
+def get_dashboard_stats():
     try:
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-            padding="max_length"
-        ).to(device)
-
-        with torch.no_grad():
-            outputs = bert_model(**inputs)
-
-        return outputs.last_hidden_state[:, 0, :].cpu().numpy().flatten()
+        stats = get_email_statistics()  # Fetch statistics from your DB or other source
+        return jsonify({
+            'totalScanned': stats['totalScanned'],
+            'phishingEmails': stats['phishingEmails'],
+            'suspiciousEmails': stats['suspiciousEmails'],
+            'safeEmails': stats['safeEmails'],
+        })
     except Exception as e:
-        print(f"[Embedding Error] {e}")
-        return np.zeros(768)
+        return jsonify({"error": str(e)}), 500
 
-# --- URL Feature Extractor ---
-def extract_url_features(url):
-    try:
-        parsed = urlparse(url)
-        return [
-            len(url),
-            len(parsed.netloc),
-            url.count('.'),
-            url.count('-'),
-            url.count('/'),
-            1 if re.match(r"\d+\.\d+\.\d+\.\d+", parsed.netloc) else 0
-        ]
-    except Exception as e:
-        print(f"[URL Extraction Error] {e}")
-        return [0]*6
+
+# --- Get Email Statistics (example) ---
+def get_email_statistics():
+    # Example stats, replace with actual logic to fetch data from your database
+    return {
+        'totalScanned': 1247,
+        'phishingEmails': 32,
+        'suspiciousEmails': 18,
+        'safeEmails': 1197
+    }
+
 
 # --- Prediction Endpoint ---
 @app.route("/predict", methods=["POST"])
@@ -99,13 +86,12 @@ def predict():
         if not text or not url:
             return jsonify({"error": "Both 'text' and 'url' must be provided."}), 400
 
-        # Generate features
+        # Process features
         text_embedding = get_bert_embedding(text)
         url_features = extract_url_features(url)
 
         combined = np.hstack([text_embedding, url_features]).reshape(1, -1)
 
-        # Predict
         prediction = model.predict(combined)[0]
 
         if prediction == 1:
@@ -117,6 +103,7 @@ def predict():
         print(f"[Prediction Error] {e}")
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
+
 # --- Logs Retrieval ---
 @app.route("/logs", methods=["GET"])
 def get_logs():
@@ -126,6 +113,7 @@ def get_logs():
     except Exception as e:
         print(f"[Logs Retrieval Error] {e}")
         return jsonify({"error": f"Could not retrieve logs: {str(e)}"}), 500
+
 
 # --- Run Flask ---
 if __name__ == "__main__":
