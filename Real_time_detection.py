@@ -85,7 +85,6 @@ def get_dashboard_stats():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 # --- Get Email Statistics (example) ---
 def get_email_statistics():
     # Example stats, replace with actual logic to fetch data from your database
