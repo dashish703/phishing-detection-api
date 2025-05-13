@@ -10,9 +10,22 @@ from urllib.parse import urlparse
 from transformers import DistilBertTokenizer, DistilBertModel
 from google.cloud import storage
 from firewall import Firewall  # ✅ Your custom module
+from flask_sqlalchemy import SQLAlchemy  # New import for database
 
+# --- Flask Setup ---
+app = Flask(__name__)
+CORS(app)
 
-# --- GCS Model Downloader ---
+# --- Database Configuration ---
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///settings.db'  # You can change this to a production DB
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# --- Load Ensemble Model from GCS ---
+bucket_name = "phishing-model-files"
+blob_name = "ensemble_phishing_model.pkl"
+
+# Download model from GCS
 def download_model_from_gcs(bucket_name, blob_name):
     try:
         storage_client = storage.Client()  # Auth handled by GCP service account
@@ -25,29 +38,38 @@ def download_model_from_gcs(bucket_name, blob_name):
     except Exception as e:
         raise RuntimeError(f"Error downloading model from GCS: {e}")
 
-
-# --- Initialize BERT ---
+# Initialize BERT
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
 bert_model = DistilBertModel.from_pretrained("distilbert-base-uncased").to(device)
 
-# --- Flask Setup ---
-app = Flask(__name__)
-CORS(app)
+# --- Initialize Firewall ---
+firewall = Firewall()
 
-# --- Load Ensemble Model from GCS ---
-bucket_name = "phishing-model-files"
-blob_name = "ensemble_phishing_model.pkl"
-
+# --- Load Ensemble Model ---
 try:
     model_path = download_model_from_gcs(bucket_name, blob_name)
     model = joblib.load(model_path)
 except Exception as e:
     raise RuntimeError(f"Error loading the model: {e}")
 
-# ✅ Initialize Firewall
-firewall = Firewall()
+# --- User Settings Model (Database Schema) ---
+class UserSettings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(80), unique=True, nullable=False)
+    notifications = db.Column(db.JSON, nullable=False)  # Store as JSON
+    whitelist = db.Column(db.JSON, nullable=False)  # Store as JSON
+    blacklist = db.Column(db.JSON, nullable=False)  # Store as JSON
 
+    def __init__(self, user_id, notifications, whitelist, blacklist):
+        self.user_id = user_id
+        self.notifications = notifications
+        self.whitelist = whitelist
+        self.blacklist = blacklist
+
+# Initialize the database (this is to create the tables)
+with app.app_context():
+    db.create_all()
 
 # --- Fetch Email Stats ---
 @app.route('/dashboard', methods=['GET'])
@@ -74,6 +96,47 @@ def get_email_statistics():
         'safeEmails': 1197
     }
 
+# --- Update User Settings (New Endpoint) ---
+@app.route("/updateSettings", methods=["POST"])
+def update_settings():
+    try:
+        data = request.get_json()
+
+        user_id = data.get("user_id")
+        notifications = data.get("notifications")
+        whitelist = data.get("whitelist")
+        blacklist = data.get("blacklist")
+
+        # Validate the input data
+        if not user_id or not notifications or not whitelist or not blacklist:
+            return jsonify({"error": "All fields ('user_id', 'notifications', 'whitelist', 'blacklist') must be provided."}), 400
+
+        # Check if user settings already exist in the database
+        user_settings = UserSettings.query.filter_by(user_id=user_id).first()
+
+        if user_settings:
+            # Update existing settings
+            user_settings.notifications = notifications
+            user_settings.whitelist = whitelist
+            user_settings.blacklist = blacklist
+        else:
+            # Create new settings
+            user_settings = UserSettings(
+                user_id=user_id,
+                notifications=notifications,
+                whitelist=whitelist,
+                blacklist=blacklist
+            )
+
+        # Commit changes to the database
+        db.session.add(user_settings)
+        db.session.commit()
+
+        return jsonify({"message": "Settings updated successfully!"}), 200
+
+    except Exception as e:
+        print(f"[Settings Error] {e}")
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 # --- Prediction Endpoint ---
 @app.route("/predict", methods=["POST"])
@@ -103,7 +166,6 @@ def predict():
         print(f"[Prediction Error] {e}")
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
-
 # --- Logs Retrieval ---
 @app.route("/logs", methods=["GET"])
 def get_logs():
@@ -113,7 +175,6 @@ def get_logs():
     except Exception as e:
         print(f"[Logs Retrieval Error] {e}")
         return jsonify({"error": f"Could not retrieve logs: {str(e)}"}), 500
-
 
 # --- Run Flask ---
 if __name__ == "__main__":
