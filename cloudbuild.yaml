@@ -21,4 +21,7 @@ steps:
       - '--region=us-central1'  # Change as per your region
       - '--allow-unauthenticated'  # For public access, remove if you need authentication
 
+options:
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET  # Use this to enable regional logs bucket
+
 timeout: '1200s'  # Optional: Timeout for the build process
