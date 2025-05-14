@@ -1,5 +1,5 @@
 steps:
-  # Step 1: Build Docker image
+  # Step 1: Build the Docker image from current directory
   - name: 'gcr.io/cloud-builders/docker'
     args:
       [
@@ -9,7 +9,7 @@ steps:
         '.'
       ]
 
-  # Step 2: Push Docker image to Container Registry
+  # Step 2: Push the image to Google Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       [
@@ -19,9 +19,9 @@ steps:
 
   # Step 3: Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
     args:
       [
-        'gcloud',
         'run',
         'deploy',
         'flask-api-service',
@@ -31,7 +31,7 @@ steps:
         '--allow-unauthenticated'
       ]
 
-# Optional: Log configuration and timeout
+# Optional settings
 options:
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 timeout: '1200s'
