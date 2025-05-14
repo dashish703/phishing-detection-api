@@ -1,29 +1,30 @@
-FROM python:3.11-slim
+# Use official Python slim image
+FROM python:3.10-slim
 
-# Set environment variables
+# Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ffmpeg \
     libgl1 \
     git \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
-# Set work directory
+# Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
+# Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy the rest of your app
-COPY . .
+# Copy source code
+COPY src/ ./src/
 
-# Expose your app port
+# Expose port for Cloud Run
 EXPOSE 8080
 
-# Run your app (change if needed)
-CMD ["python", "Real_time_detection.py"]
+# Set entrypoint
+CMD ["python", "src/Real_time_detection.py"]
