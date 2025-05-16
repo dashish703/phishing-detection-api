@@ -20,7 +20,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy source code
+# Copy model files and source code
+COPY ensemble_phishing_model.pkl .
+COPY tfidf_vectorizer.pkl .
+COPY xgboost_model.json .
 COPY src/ ./src/
 
 # Expose port for Cloud Run
