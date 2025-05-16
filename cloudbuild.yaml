@@ -1,20 +1,20 @@
 steps:
-  # Step 1: Build the Docker image from current directory
+  # Step 1: Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
       [
         'build',
         '-t',
-        'gcr.io/phishing-detection-450717/flask-api-service',
+        'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishimg',
         '.'
       ]
 
-  # Step 2: Push the image to Google Container Registry
+  # Step 2: Push to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       [
         'push',
-        'gcr.io/phishing-detection-450717/flask-api-service'
+        'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishimg'
       ]
 
   # Step 3: Deploy to Cloud Run
@@ -25,13 +25,12 @@ steps:
         'run',
         'deploy',
         'flask-api-service',
-        '--image=gcr.io/phishing-detection-450717/flask-api-service',
+        '--image=us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishimg',
         '--platform=managed',
-        '--region=us-central1',
+        '--region=us-west1',
         '--allow-unauthenticated'
       ]
 
-# Optional settings
 options:
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 timeout: '1200s'
