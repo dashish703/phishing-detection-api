@@ -2,8 +2,8 @@
 FROM python:3.10-slim
 
 # Environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,20 +11,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     git \
+ && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Install Python dependencies
+# Copy requirements file first to leverage Docker cache
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy model files and source code
+# Upgrade pip and install Python dependencies
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
+
+# Copy all model and source files
 COPY ensemble_phishing_model.pkl .
 COPY tfidf_vectorizer.pkl .
 COPY xgboost_model.json .
 COPY src/ ./src/
+
+# Set environment variable for port (optional but helpful)
+ENV PORT=8080
 
 # Expose port for Cloud Run
 EXPOSE 8080

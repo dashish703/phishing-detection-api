@@ -1,9 +1,10 @@
 steps:
-  # Step 1: Build the Docker image
+  # Step 1: Build the Docker image (no cache to avoid stale requirements issues)
   - name: 'gcr.io/cloud-builders/docker'
     args:
       [
         'build',
+        '--no-cache',
         '-t',
         'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishimg',
         '.'
@@ -32,5 +33,10 @@ steps:
       ]
 
 options:
+  logging: CLOUD_LOGGING_ONLY
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+  machineType: E2_HIGHCPU_8  # Optional: faster build
+  env:
+    - DOCKER_BUILDKIT=1
+
 timeout: '1200s'
