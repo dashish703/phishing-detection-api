@@ -11,13 +11,15 @@ from transformers import DistilBertTokenizer, DistilBertModel
 from google.cloud import storage
 from firewall import Firewall  # ✅ Custom module
 from flask_sqlalchemy import SQLAlchemy
-# Optional: For sending emails
-# import smtplib
-# from email.message import EmailMessage
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
 # --- Flask Setup ---
 app = Flask(__name__)
 CORS(app)
+
+# --- OAuth2 Scopes ---
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 # --- Database Configuration ---
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///settings.db'
@@ -73,7 +75,7 @@ class UserSettings(db.Model):
 with app.app_context():
     db.create_all()
 
-# --- Dummy Stats ---
+# --- Dashboard Stats ---
 @app.route('/dashboard', methods=['GET'])
 def get_dashboard_stats():
     try:
@@ -132,19 +134,57 @@ def predict():
         if not text or not url:
             return jsonify({"error": "Both 'text' and 'url' must be provided."}), 400
 
-        text_embedding = get_bert_embedding(text)
-        url_features = extract_url_features(url)
-        combined = np.hstack([text_embedding, url_features]).reshape(1, -1)
-
-        prediction = model.predict(combined)[0]
-
-        if prediction == 1:
-            firewall.log_phishing_attempt(text, url, prediction)
-
-        return jsonify({"prediction": int(prediction)})
+        return jsonify(predict_email(text, url))
 
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+def predict_email(text, url):
+    text_embedding = get_bert_embedding(text)
+    url_features = extract_url_features(url)
+    combined = np.hstack([text_embedding, url_features]).reshape(1, -1)
+
+    prediction = model.predict(combined)[0]
+    confidence = max(model.predict_proba(combined)[0])  # confidence score
+
+    if prediction == 1:
+        firewall.log_phishing_attempt(text, url, prediction)
+
+    return {"phishing": bool(prediction), "confidence": float(confidence)}
+
+# --- Scan Gmail Inbox ---
+@app.route('/scan-inbox', methods=['GET'])
+def scan_inbox():
+    try:
+        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+        creds = flow.run_local_server(port=0)
+        service = build('gmail', 'v1', credentials=creds)
+
+        results = service.users().messages().list(userId='me', maxResults=5).execute()
+        messages = results.get('messages', [])
+
+        scan_results = []
+
+        for msg in messages:
+            detail = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
+            snippet = detail.get('snippet', '')
+            payload = {"text": snippet, "url": ""}
+
+            result = predict_email(payload['text'], payload['url'])
+
+            subject = next((h['value'] for h in detail.get('payload', {}).get('headers', []) if h['name'] == 'Subject'), "No Subject")
+
+            scan_results.append({
+                "subject": subject,
+                "snippet": snippet,
+                "phishing": result['phishing'],
+                "confidence": result['confidence']
+            })
+
+        return jsonify({"emails": scan_results})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # --- Reset Password Endpoint ---
 @app.route('/reset-password', methods=['POST'])
@@ -156,11 +196,8 @@ def reset_password():
         if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
             return jsonify({"error": "Valid email is required"}), 400
 
-        # TODO: Check if user exists in your database
-
-        # TODO: Send actual reset email (placeholder)
+        # Placeholder logic
         print(f"[INFO] Reset link would be sent to {email}")
-        # Example: send_email_to_user(email)
 
         return jsonify({"message": "If the email exists, a reset link has been sent."}), 200
 

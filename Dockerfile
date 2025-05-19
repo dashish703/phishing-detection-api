@@ -1,40 +1,29 @@
-# Use official Python slim image
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# Environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
     build-essential \
     ffmpeg \
     libgl1 \
     git \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Set work directory
 WORKDIR /app
 
-# Copy requirements file first to leverage Docker cache
+# Copy requirements and install dependencies
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Upgrade pip and install Python dependencies
-RUN pip install --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt
+# Copy the rest of your app
+COPY . .
 
-# Copy all model and source files
-COPY ensemble_phishing_model.pkl .
-COPY tfidf_vectorizer.pkl .
-COPY xgboost_model.json .
-COPY Real_time_detection.py .
-
-# Set environment variable for port (Cloud Run default)
-ENV PORT=8080
-
-# Expose port for Cloud Run
+# Expose your app port
 EXPOSE 8080
 
-# Set entrypoint
+# Run your app (change if needed)
 CMD ["python", "Real_time_detection.py"]
