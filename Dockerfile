@@ -28,7 +28,6 @@ RUN pip install --upgrade pip \
 COPY ensemble_phishing_model.pkl .
 COPY tfidf_vectorizer.pkl .
 COPY xgboost_model.json .
-COPY src/ ./src/
 
 # Set environment variable for port (optional but helpful)
 ENV PORT=8080
@@ -36,5 +35,9 @@ ENV PORT=8080
 # Expose port for Cloud Run
 EXPOSE 8080
 
-# Set entrypoint
-CMD ["python", "src/Real_time_detection.py"]
+# Copy the script directly (no src/)
+COPY Real_time_detection.py .
+
+# Then run it directly
+CMD ["python", "Real_time_detection.py"]
+
