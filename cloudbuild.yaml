@@ -1,0 +1,23 @@
+steps:
+  # Step 1: Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend', '.']
+
+  # Step 2: Push image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend']
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      [
+        'run', 'deploy', 'phishing-backend',
+        '--image', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend',
+        '--region', 'us-west1',
+        '--platform', 'managed',
+        '--allow-unauthenticated'
+      ]
+
+images:
+  - 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend'
