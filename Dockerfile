@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -12,18 +12,19 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Set work directory
+# Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
+# Copy and install Python dependencies
 COPY requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of your app
+# Copy project files
 COPY . .
 
-# Expose your app port
+# Expose the port Flask runs on
 EXPOSE 8080
 
-# Run your app (change if needed)
+# Start the Flask app
 CMD ["python", "Real_time_detection.py"]
