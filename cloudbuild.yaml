@@ -21,3 +21,6 @@ steps:
 
 images:
   - 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
