@@ -71,6 +71,16 @@ class UserSettings(db.Model):
         self.whitelist = whitelist
         self.blacklist = blacklist
 
+# --- Email Scan Result Model ---
+class EmailScanResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(80), nullable=False)
+    subject = db.Column(db.String(255))
+    snippet = db.Column(db.Text)
+    phishing = db.Column(db.Boolean)
+    confidence = db.Column(db.Float)
+    timestamp = db.Column(db.DateTime, default=db.func.now())
+
 # --- Initialize DB ---
 with app.app_context():
     db.create_all()
@@ -85,11 +95,21 @@ def get_dashboard_stats():
         return jsonify({"error": str(e)}), 500
 
 def get_email_statistics():
+    total = EmailScanResult.query.count()
+    phishing = EmailScanResult.query.filter_by(phishing=True).count()
+    safe = EmailScanResult.query.filter_by(phishing=False).count()
+
+    # Suspicious: phishing == False and confidence < 0.7
+    suspicious = EmailScanResult.query.filter(
+        EmailScanResult.phishing == False,
+        EmailScanResult.confidence < 0.7
+    ).count()
+
     return {
-        'totalScanned': 1247,
-        'phishingEmails': 32,
-        'suspiciousEmails': 18,
-        'safeEmails': 1197
+        'totalScanned': total,
+        'phishingEmails': phishing,
+        'suspiciousEmails': suspicious,
+        'safeEmails': safe - suspicious
     }
 
 # --- Update User Settings ---
@@ -168,11 +188,9 @@ def scan_inbox():
         for msg in messages:
             detail = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
             snippet = detail.get('snippet', '')
-            payload = {"text": snippet, "url": ""}
-
-            result = predict_email(payload['text'], payload['url'])
-
             subject = next((h['value'] for h in detail.get('payload', {}).get('headers', []) if h['name'] == 'Subject'), "No Subject")
+
+            result = predict_email(snippet, "")
 
             scan_results.append({
                 "subject": subject,
@@ -180,6 +198,17 @@ def scan_inbox():
                 "phishing": result['phishing'],
                 "confidence": result['confidence']
             })
+
+            # Save result to DB immediately
+            scan_entry = EmailScanResult(
+                user_id='me',  # Replace with actual authenticated user ID in future
+                subject=subject,
+                snippet=snippet,
+                phishing=result['phishing'],
+                confidence=result['confidence']
+            )
+            db.session.add(scan_entry)
+            db.session.commit()
 
         return jsonify({"emails": scan_results})
 

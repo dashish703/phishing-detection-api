@@ -1,29 +1,34 @@
-# Ignore Python bytecode files
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+# Exclude models, checkpoints, large binaries
+*.pkl
+*.joblib
+*.pt
+*.h5
+*.ckpt
 
-# Ignore swap files from text editors (e.g., Vim)
-*.swp
-
-# Ignore environment files
-.env
-myenv/
-
-# Ignore database files
-*.db
-*.sqlite3
-
-# Ignore log files
+# Exclude temporary files
+*.tmp
 *.log
+*.bak
+*.old
+*.orig
 
-# Ignore system-specific files
-.DS_Store
+# Exclude large datasets or saved outputs
+*.csv
+*.json
+data/
+logs/
+outputs/
 
-# Ignore editor configuration files
+# IDE and environment folders
 .vscode/
 .idea/
+__pycache__/
+*.py[cod]
+.env
+*.db
 
-# Ignore specific project files
-Phishing_data.json
+# Git and build
+.git/
+*.egg-info/
+build/
+dist/
