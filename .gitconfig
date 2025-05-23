@@ -1,0 +1,9 @@
+[credential "https://huggingface.co"]
+	provider = generic
+[core]
+	autocrlf = true
+[user]
+	name = Ashish Dash
+	email = dashish703@gmail.com
+[safe]
+	directory = C:/Users/DEV Verma
