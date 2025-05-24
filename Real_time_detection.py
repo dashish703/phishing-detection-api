@@ -301,7 +301,4 @@ def reset_password():
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
-# --- Main ---
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+
