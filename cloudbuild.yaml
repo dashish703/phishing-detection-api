@@ -7,14 +7,14 @@ steps:
       '.'
     ]
 
-  # Step 2: Push the SHA-tagged image
+  # Step 2: Push the image
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
       'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$SHORT_SHA'
     ]
 
-  # Step 3: Deploy using the same tag
+  # Step 3: Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
@@ -25,7 +25,9 @@ steps:
         '--platform', 'managed',
         '--allow-unauthenticated',
         '--timeout', '900s',
-        '--memory', '1Gi',
+        '--memory', '2Gi',
+        '--cpu', '2',
+        '--max-instances', '5',
         '--set-secrets', 'GCS_KEY=gcs-key:latest'
       ]
 
@@ -34,3 +36,4 @@ images:
 
 options:
   logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
