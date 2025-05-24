@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Set environment variables
+# Environment settings
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy and install Python dependencies
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
@@ -23,8 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY . .
 
-# Expose the port Flask runs on
+# Expose Flask port
 EXPOSE 8080
 
-# Start the Flask app
-CMD ["python", "Real_time_detection.py"]
+# Use Gunicorn to serve Flask app
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "Real_time_detection:app"]
