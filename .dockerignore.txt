@@ -1,34 +1,40 @@
-# Exclude models, checkpoints, large binaries
+# === Machine Learning artifacts ===
 *.pkl
 *.joblib
 *.pt
 *.h5
 *.ckpt
 
-# Exclude temporary files
-*.tmp
+# === Logs, outputs, and datasets ===
 *.log
+*.tmp
 *.bak
 *.old
 *.orig
-
-# Exclude large datasets or saved outputs
 *.csv
 *.json
-data/
 logs/
 outputs/
+data/
 
-# IDE and environment folders
-.vscode/
-.idea/
+# === Python-related files ===
 __pycache__/
 *.py[cod]
-.env
 *.db
+.env
+.venv/
+.env.*
 
-# Git and build
+# === IDEs and tooling ===
+.vscode/
+.idea/
+
+# === Git and build artifacts ===
 .git/
 *.egg-info/
 build/
 dist/
+.DS_Store
+docker-compose.yml
+*.tar.gz
+*.tgz
