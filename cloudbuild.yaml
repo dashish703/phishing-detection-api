@@ -1,26 +1,34 @@
 steps:
-  # Step 1: Build Docker image
+  # Step 1: Build Docker image with commit SHA tag
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend', '.']
+    args: [
+      'build',
+      '-t', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$COMMIT_SHA',
+      '.'
+    ]
 
-  # Step 2: Push image to Artifact Registry
+  # Step 2: Push the image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend']
+    args: [
+      'push',
+      'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$COMMIT_SHA'
+    ]
 
-  # Step 3: Deploy to Cloud Run
+  # Step 3: Deploy the image to Cloud Run using the commit SHA tag
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       [
         'run', 'deploy', 'phishing-backend',
-        '--image', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend',
+        '--image', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$COMMIT_SHA',
         '--region', 'us-west1',
         '--platform', 'managed',
-        '--allow-unauthenticated'
+        '--allow-unauthenticated',
+        '--service-account', 'model-accessor@phishing-detection-450717.iam.gserviceaccount.com'
       ]
 
 images:
-  - 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend'
+  - 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$COMMIT_SHA'
 
 options:
   logging: CLOUD_LOGGING_ONLY
