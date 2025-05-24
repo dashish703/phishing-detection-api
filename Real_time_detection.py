@@ -14,6 +14,7 @@ from flask_sqlalchemy import SQLAlchemy
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
 
 # --- Flask Setup ---
 app = Flask(__name__)
@@ -28,13 +29,24 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.secret_key = os.environ.get("FLASK_SECRET", "your-secret-key")
 db = SQLAlchemy(app)
 
+# --- Use GCS secret key for Storage Client ---
+# Secret is mounted at /secrets/GCS_KEY - set this in your Cloud Run service
+GCS_KEY_PATH = "/secrets/GCS_KEY"
+
+def get_storage_client():
+    if os.path.exists(GCS_KEY_PATH):
+        return storage.Client.from_service_account_json(GCS_KEY_PATH)
+    else:
+        # fallback for local dev if key not mounted
+        return storage.Client()
+
 # --- Load Ensemble Model from GCS ---
 bucket_name = "phishing-model-files"
 blob_name = "ensemble_phishing_model.pkl"
 
 def download_model_from_gcs(bucket_name, blob_name):
     try:
-        storage_client = storage.Client()
+        storage_client = get_storage_client()
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(blob_name)
 
@@ -244,7 +256,7 @@ def update_settings():
         whitelist = data.get("whitelist")
         blacklist = data.get("blacklist")
 
-        if not user_id or not notifications or not whitelist or not blacklist:
+        if not user_id or notifications is None or whitelist is None or blacklist is None:
             return jsonify({"error": "Missing fields"}), 400
 
         user_settings = UserSettings.query.filter_by(user_id=user_id).first()

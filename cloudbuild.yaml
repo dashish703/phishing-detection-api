@@ -1,9 +1,9 @@
 steps:
-  # Step 1: Build the Docker image with a unique tag (SHORT_SHA)
+  # Step 1: Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
-      '-t', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$SHORT_SHA',
+      '-t', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend',
       '.'
     ]
 
@@ -11,25 +11,26 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$SHORT_SHA'
+      'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend'
     ]
 
-  # Step 3: Deploy the container to Cloud Run
+  # Step 3: Deploy to Cloud Run, mounting secret
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
       [
         'run', 'deploy', 'phishing-backend',
-        '--image', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$SHORT_SHA',
+        '--image', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend',
         '--region', 'us-west1',
         '--platform', 'managed',
         '--allow-unauthenticated',
         '--timeout', '900s',
-        '--memory', '1Gi'
+        '--memory', '1Gi',
+        '--set-secrets', 'GCS_KEY=gcs-key:latest'  # 👈 this mounts the secret
       ]
 
 images:
-  - 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$SHORT_SHA'
+  - 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend'
 
 options:
   logging: CLOUD_LOGGING_ONLY
