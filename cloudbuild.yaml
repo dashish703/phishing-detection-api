@@ -1,9 +1,9 @@
 steps:
-  # Step 1: Build Docker image with commit SHA tag
+  # Step 1: Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
-      '-t', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$COMMIT_SHA',
+      '-t', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend',
       '.'
     ]
 
@@ -11,24 +11,25 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$COMMIT_SHA'
+      'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend'
     ]
 
-  # Step 3: Deploy the image to Cloud Run using the commit SHA tag
+  # Step 3: Deploy the container to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'gcloud'
     args:
       [
         'run', 'deploy', 'phishing-backend',
-        '--image', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$COMMIT_SHA',
+        '--image', 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend',
         '--region', 'us-west1',
         '--platform', 'managed',
         '--allow-unauthenticated',
-        '--service-account', 'model-accessor@phishing-detection-450717.iam.gserviceaccount.com'
+        '--timeout', '900s',  # ⏳ Extended timeout (optional but useful if model loading is slow)
+        '--memory', '1Gi'     # 📦 Increase memory if needed
       ]
 
 images:
-  - 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$COMMIT_SHA'
+  - 'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend'
 
 options:
   logging: CLOUD_LOGGING_ONLY
