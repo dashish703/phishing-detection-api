@@ -8,12 +8,13 @@ import logging
 import threading
 from functools import wraps
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from flask import Flask, request, jsonify, redirect, abort
 from flask_cors import CORS
 from urllib.parse import urlparse
 from transformers import DistilBertTokenizer, DistilBertModel
-from google.cloud import storage
+from google.cloud import storage, secretmanager
 from firewall import Firewall
 from flask_sqlalchemy import SQLAlchemy
 from google.oauth2.credentials import Credentials
@@ -39,10 +40,19 @@ logger = logging.getLogger(__name__)
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 # --- Configurations ---
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///settings.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///settings.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = os.environ.get("FLASK_SECRET", "your-secret-key")
-JWT_SECRET = os.environ.get("JWT_SECRET", "super-secret-jwt-key")
+
+FLASK_SECRET = os.environ.get("FLASK_SECRET")
+if not FLASK_SECRET:
+    logger.warning("FLASK_SECRET env var not set, using insecure default!")
+app.secret_key = FLASK_SECRET or "your-default-insecure-secret"
+
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    logger.warning("JWT_SECRET env var not set, using insecure default!")
+JWT_SECRET = JWT_SECRET or "super-secret-jwt-key"
+
 JWT_ALGORITHM = 'HS256'
 JWT_EXP_DELTA_SECONDS = 3600  # 1 hour
 
@@ -52,9 +62,37 @@ db = SQLAlchemy(app)
 GCS_KEY_PATH = "/secrets/GCS_KEY"  # Mounted secret path on GCP Cloud Run
 
 def get_storage_client():
-    if os.path.exists(GCS_KEY_PATH):
+    if Path(GCS_KEY_PATH).exists():
         return storage.Client.from_service_account_json(GCS_KEY_PATH)
     return storage.Client()
+
+# --- Secret Manager Client ---
+secret_client = secretmanager.SecretManagerServiceClient()
+
+def get_secret(secret_name: str, version: str = "latest") -> str:
+    """
+    Access Google Secret Manager secret payload as a string.
+    """
+    project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+    if not project_id:
+        raise RuntimeError("GOOGLE_CLOUD_PROJECT environment variable not set")
+    secret_path = f"projects/{project_id}/secrets/{secret_name}/versions/{version}"
+    response = secret_client.access_secret_version(name=secret_path)
+    secret_data = response.payload.data.decode("UTF-8")
+    return secret_data
+
+# --- Load credentials.json content from Secret Manager into a temp file ---
+def load_credentials_json():
+    secret_json = get_secret("gmail-oauth-credentials")
+    tmp_cred_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+    tmp_cred_file.write(secret_json.encode('utf-8'))
+    tmp_cred_file.flush()
+    tmp_cred_file.close()
+    logger.info(f"Loaded gmail-oauth-credentials from Secret Manager into {tmp_cred_file.name}")
+    return tmp_cred_file.name
+
+# Load client secrets file path for OAuth flow
+CREDENTIALS_PATH = load_credentials_json()
 
 # --- Load Phishing Model from GCS ---
 bucket_name = "phishing-model-files"
@@ -145,7 +183,7 @@ def require_auth(f):
     return decorated
 
 # --- OAuth2 Endpoints ---
-REDIRECT_URI = "https://phishing-backend-61828726396.us-west1.run.app/oauth2callback"
+REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "https://phishing-backend-61828726396.us-west1.run.app/oauth2callback")
 
 @app.route('/authorize')
 def authorize():
@@ -153,11 +191,16 @@ def authorize():
     if not user_id:
         return jsonify({"error": "Missing user_id in query"}), 400
 
-    flow = Flow.from_client_secrets_file(
-        'credentials.json',
-        scopes=SCOPES,
-        redirect_uri=REDIRECT_URI
-    )
+    try:
+        flow = Flow.from_client_secrets_file(
+            CREDENTIALS_PATH,
+            scopes=SCOPES,
+            redirect_uri=REDIRECT_URI
+        )
+    except Exception as e:
+        logger.error(f"Failed to create OAuth Flow: {e}")
+        return jsonify({"error": "OAuth flow initialization failed"}), 500
+
     auth_url, _ = flow.authorization_url(
         prompt='consent',
         access_type='offline',
@@ -173,12 +216,17 @@ def oauth2callback():
     if not user_id:
         return "Missing state (user_id)", 400
 
-    flow = Flow.from_client_secrets_file(
-        'credentials.json',
-        scopes=SCOPES,
-        redirect_uri=REDIRECT_URI
-    )
-    flow.fetch_token(authorization_response=request.url)
+    try:
+        flow = Flow.from_client_secrets_file(
+            CREDENTIALS_PATH,
+            scopes=SCOPES,
+            redirect_uri=REDIRECT_URI
+        )
+        flow.fetch_token(authorization_response=request.url)
+    except Exception as e:
+        logger.error(f"OAuth callback failed: {e}")
+        return jsonify({"error": "OAuth token fetch failed"}), 400
+
     creds = flow.credentials
 
     token_data = {
@@ -205,182 +253,125 @@ def oauth2callback():
         "jwt_token": jwt_token
     })
 
-# --- Gmail Scan Endpoint ---
-@app.route('/scan-inbox')
-@require_auth
-def scan_inbox(user_id):
-    record = GmailToken.query.filter_by(user_id=user_id).first()
-    if not record:
-        return jsonify({"error": "User not authorized or no token found"}), 403
+# --- Gmail API Utilities ---
 
+def build_gmail_service(user_id):
+    gmail_token = GmailToken.query.filter_by(user_id=user_id).first()
+    if not gmail_token:
+        raise ValueError("No Gmail OAuth2 token found for user")
+
+    creds_data = gmail_token.token
     creds = Credentials(
-        token=record.token['token'],
-        refresh_token=record.token['refresh_token'],
-        token_uri=record.token['token_uri'],
-        client_id=record.token['client_id'],
-        client_secret=record.token['client_secret'],
-        scopes=record.token['scopes']
+        token=creds_data['token'],
+        refresh_token=creds_data.get('refresh_token'),
+        token_uri=creds_data['token_uri'],
+        client_id=creds_data['client_id'],
+        client_secret=creds_data['client_secret'],
+        scopes=creds_data['scopes']
     )
-    try:
-        if not creds.valid and creds.refresh_token:
+
+    # Refresh token if expired or close to expiration
+    if creds.expired and creds.refresh_token:
+        try:
             creds.refresh(Request())
-            record.token['token'] = creds.token
+            # Update stored token
+            gmail_token.token['token'] = creds.token
             db.session.commit()
-            logger.info(f"Refreshed OAuth token for user_id={user_id}")
-    except Exception as e:
-        logger.error(f"Error refreshing token for user_id={user_id}: {e}")
-        return jsonify({"error": "Failed to refresh OAuth token"}), 500
+            logger.info(f"Refreshed Gmail token for user_id={user_id}")
+        except Exception as e:
+            logger.error(f"Failed to refresh Gmail token: {e}")
+            raise
 
+    service = build('gmail', 'v1', credentials=creds)
+    return service
+
+# --- Phishing Prediction Helper ---
+
+def bert_encode(text):
+    with model_lock:
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True).to(device)
+        outputs = bert_model(**inputs)
+        # Use [CLS] token embedding as sentence embedding
+        embedding = outputs.last_hidden_state[:, 0, :].detach().cpu().numpy()
+    return embedding
+
+def predict_phishing(subject, snippet):
+    combined_text = f"{subject} {snippet}"
+    embedding = bert_encode(combined_text)
+    prediction = model.predict(embedding)
+    confidence = np.max(model.predict_proba(embedding))
+    phishing_flag = bool(prediction[0])
+    return phishing_flag, confidence
+
+# --- Routes ---
+
+@app.route('/scan_gmail')
+@require_auth
+def scan_gmail(user_id):
     try:
-        service = build('gmail', 'v1', credentials=creds)
-        messages_resp = service.users().messages().list(userId='me', maxResults=5).execute()
-        messages = messages_resp.get('messages', [])
+        service = build_gmail_service(user_id)
+        results = service.users().messages().list(userId='me', maxResults=10).execute()
+        messages = results.get('messages', [])
     except Exception as e:
-        logger.error(f"Gmail API call failed for user_id={user_id}: {e}")
-        return jsonify({"error": "Failed to fetch emails from Gmail"}), 500
+        logger.error(f"Failed to fetch Gmail messages for user {user_id}: {e}")
+        return jsonify({"error": "Failed to fetch Gmail messages"}), 500
 
-    results = []
-
+    scan_results = []
     for msg in messages:
         try:
-            detail = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
-            snippet = detail.get('snippet', '')
-            subject = next(
-                (h['value'] for h in detail.get('payload', {}).get('headers', []) if h['name'] == 'Subject'),
-                "No Subject"
-            )
-            result = predict_email(snippet, "")
-            results.append({
+            msg_data = service.users().messages().get(userId='me', id=msg['id'], format='metadata', metadataHeaders=['Subject']).execute()
+            headers = msg_data.get('payload', {}).get('headers', [])
+            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), "")
+            snippet = msg_data.get('snippet', "")
+
+            phishing, confidence = predict_phishing(subject, snippet)
+
+            scan_results.append({
                 "subject": subject,
                 "snippet": snippet,
-                "phishing": result['phishing'],
-                "confidence": result['confidence']
+                "phishing": phishing,
+                "confidence": confidence
             })
-            db.session.add(EmailScanResult(
+
+            # Store scan result
+            record = EmailScanResult(
                 user_id=user_id,
                 subject=subject,
                 snippet=snippet,
-                phishing=result['phishing'],
-                confidence=result['confidence']
-            ))
-            db.session.commit()
+                phishing=phishing,
+                confidence=confidence
+            )
+            db.session.add(record)
         except Exception as e:
-            logger.error(f"Error processing message id={msg['id']} for user_id={user_id}: {e}")
+            logger.warning(f"Failed to scan message id={msg['id']}: {e}")
             continue
 
-    logger.info(f"Scanned inbox for user_id={user_id}, {len(results)} emails processed.")
-    return jsonify({"emails": results})
+    db.session.commit()
 
-# --- Phishing Prediction Logic ---
-@app.route("/predict", methods=["POST"])
-def predict():
-    data = request.get_json(force=True)
-    text = data.get("text", "")
-    url = data.get("url", "")
-    if not text or not url:
-        return jsonify({"error": "Missing 'text' or 'url'"}), 400
+    return jsonify({"results": scan_results})
 
-    # Limit input length to prevent abuse
-    if len(text) > 2000 or len(url) > 500:
-        return jsonify({"error": "Input text or URL too long"}), 400
-
-    try:
-        result = predict_email(text, url)
-        return jsonify(result)
-    except Exception as e:
-        logger.error(f"Prediction error: {e}")
-        return jsonify({"error": "Prediction failed"}), 500
-
-def predict_email(text, url):
-    with model_lock:
-        text_vec = get_bert_embedding(text)
-        url_vec = extract_url_features(url)
-        features = np.hstack([text_vec, url_vec]).reshape(1, -1)
-        prediction = model.predict(features)[0]
-        confidence = max(model.predict_proba(features)[0])
-        if prediction == 1:
-            firewall.log_phishing_attempt(text, url, prediction)
-        return {"phishing": bool(prediction), "confidence": float(confidence)}
-
-def get_bert_embedding(text):
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    with torch.no_grad():
-        outputs = bert_model(**inputs)
-    return outputs.last_hidden_state.mean(dim=1).cpu().numpy().flatten()
-
-def extract_url_features(url):
-    parsed = urlparse(url)
-    return np.array([
-        len(url),
-        len(parsed.netloc),
-        len(parsed.path),
-        int(bool(re.search(r"\d", url))),
-        int(url.count('-'))
-    ])
-
-# --- Dashboard Stats ---
-@app.route('/dashboard')
+# --- Dashboard stats route example ---
+@app.route('/dashboard_stats')
 @require_auth
-def dashboard(user_id):
-    total = EmailScanResult.query.filter_by(user_id=user_id).count()
-    phishing = EmailScanResult.query.filter_by(user_id=user_id, phishing=True).count()
-    suspicious = EmailScanResult.query.filter(
-        EmailScanResult.user_id==user_id,
-        EmailScanResult.phishing == False,
-        EmailScanResult.confidence < 0.7
-    ).count()
-    safe = total - phishing - suspicious
-
+def dashboard_stats(user_id):
+    # Example: count phishing emails scanned for user
+    phishing_count = EmailScanResult.query.filter_by(user_id=user_id, phishing=True).count()
+    total_count = EmailScanResult.query.filter_by(user_id=user_id).count()
     return jsonify({
-        'totalScanned': total,
-        'phishingEmails': phishing,
-        'suspiciousEmails': suspicious,
-        'safeEmails': safe
+        "user_id": user_id,
+        "phishing_count": phishing_count,
+        "total_count": total_count
     })
 
-# --- Settings Update ---
-@app.route("/updateSettings", methods=["POST"])
-@require_auth
-def update_settings(user_id):
-    data = request.get_json(force=True)
-    notifications = data.get("notifications")
-    whitelist = data.get("whitelist")
-    blacklist = data.get("blacklist")
-    if notifications is None or whitelist is None or blacklist is None:
-        return jsonify({"error": "Missing fields"}), 400
-
-    user_settings = UserSettings.query.filter_by(user_id=user_id).first()
-    if user_settings:
-        user_settings.notifications = notifications
-        user_settings.whitelist = whitelist
-        user_settings.blacklist = blacklist
+# --- Firewall test route ---
+@app.route('/test_firewall')
+def test_firewall():
+    test_ip = request.remote_addr or "unknown"
+    if firewall.is_blocked(test_ip):
+        return jsonify({"firewall": "blocked"})
     else:
-        user_settings = UserSettings(user_id=user_id, notifications=notifications, whitelist=whitelist, blacklist=blacklist)
-        db.session.add(user_settings)
-    db.session.commit()
-    logger.info(f"Settings updated for user_id={user_id}")
-    return jsonify({"message": "Settings updated successfully!"})
+        return jsonify({"firewall": "allowed"})
 
-# --- Logs Retrieval ---
-@app.route("/logs")
-@require_auth
-def logs(user_id):
-    # Optionally filter logs per user here, currently global
-    recent = firewall.get_recent_attempts()
-    logger.info(f"Logs retrieved by user_id={user_id}")
-    return jsonify({"logs": recent})
-
-# --- Password Reset Placeholder ---
-@app.route('/reset-password', methods=['POST'])
-def reset_password():
-    email = request.get_json(force=True).get("email", "").strip()
-    if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-        return jsonify({"error": "Valid email required"}), 400
-    logger.info(f"[INFO] Password reset link would be sent to {email}")
-    return jsonify({"message": "If the email exists, a reset link has been sent."})
-
-# --- App Runner ---
+# --- Main Entry ---
 if __name__ == "__main__":
-    # Cloud Run expects app on 0.0.0.0:8080
-    app.run(host='0.0.0.0', port=8080)
+    app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
