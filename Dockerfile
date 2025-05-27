@@ -1,34 +1,43 @@
-# Stage 1: Build and install dependencies
+# ---------- Stage 1: Build and install dependencies ----------
 FROM python:3.10-slim AS base
 
 # Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
-# Install system dependencies
+# Install system dependencies and cleanup
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    ffmpeg \
     libgl1 \
+    ffmpeg \
     git \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    curl \
+ && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
+# Upgrade pip and install dependencies
 COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-# Stage 2: Copy app (no credentials)
+# ---------- Stage 2: Copy app source and finalize image ----------
 FROM base AS final
 
-# Copy application source code only
+# Set working directory
+WORKDIR /app
+
+# Copy the full application source code
 COPY . .
 
-# Expose the app port
+# NOTE: Secrets like GCS_KEY and GMAIL_CREDENTIALS are mounted at runtime on Cloud Run
+#       and should NOT be included in this image.
+
+# Expose the port used by Gunicorn on Cloud Run
 EXPOSE 8080
 
-# Start app with Gunicorn
+# Start the Flask application using Gunicorn
+# Replace 'Real_time_detection:app' if your entrypoint module is named differently
 CMD ["gunicorn", "-b", "0.0.0.0:8080", "Real_time_detection:app"]

@@ -1,41 +1,98 @@
 # === Machine Learning artifacts ===
-*.pkl
-*.joblib
-*.pt
-*.h5
 *.ckpt
+*.h5
+*.joblib
+*.model
+*.onnx
+*.pkl
+*.pt
+*.sav
+*.tflite
 
 # === Logs, outputs, and datasets ===
-*.log
-*.tmp
 *.bak
-*.old
-*.orig
 *.csv
 *.json
-!credentials.json
+*.log
+*.npy
+*.npz
+*.old
+*.orig
+*.parquet
+*.tmp
+*.tsv
+*.xlsx
+checkpoints/
+data/
 logs/
 outputs/
-data/
+runs/
 
-# === Python-related files ===
+# === Secrets and credentials ===
+.env
+.env.*
+.envrc
+*.pem
+instance/
+secrets/
+secrets.json
+# Explicitly allow tracked auth credentials if intended
+!credentials.json
+!service_account.json
+
+# === Python-related ===
 __pycache__/
 *.py[cod]
 *.db
-.env
+*.sqlite3
+*.db-journal
+*.pid
+*.coverage
+.coverage.*
+.cache/
+.tox/
+.pytest_cache/
+.mypy_cache/
 .venv/
-.env.*
+venv/
+ENV/
 
-# === IDEs and tooling ===
+# === Jupyter Notebook and Colab ===
+*.ipynb
+*.nbconvert.ipynb
+*.colab
+.ipynb_checkpoints/
+
+# === IDEs and editor settings ===
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
 
-# === Git and build artifacts ===
+# === Git, Python packaging, and Docker artifacts ===
 .git/
 *.egg-info/
 build/
 dist/
-.DS_Store
-docker-compose.yml
 *.tar.gz
 *.tgz
+*.whl
+.DS_Store
+Dockerfile.*
+*.dockerfile
+
+# === Cloud-specific (e.g. GCP) ===
+.gcloud/
+*.tfstate
+*.tfstate.backup
+
+# === CI/CD and automation ===
+.github/
+*.retry
+*.gz
+*.out
+
+# === System and OS junk ===
+Thumbs.db
+ehthumbs.db
+desktop.ini
