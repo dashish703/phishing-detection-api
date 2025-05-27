@@ -28,7 +28,7 @@ steps:
         '--memory', '2Gi',
         '--cpu', '2',
         '--max-instances', '5',
-        '--set-secrets', 'GCS_KEY=gcs-key:latest'
+        '--set-secrets', 'GMAIL_CREDENTIALS=gmail-oauth-credentials:latest'
       ]
 
 images:

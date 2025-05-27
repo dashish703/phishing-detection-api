@@ -21,12 +21,11 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Stage 2: Copy app and credentials
+# Stage 2: Copy app (no credentials)
 FROM base AS final
 
-# Copy everything including credentials (make sure it's in your .dockerignore exception list if needed)
+# Copy application source code only
 COPY . .
-COPY credentials.json ./credentials.json
 
 # Expose the app port
 EXPOSE 8080

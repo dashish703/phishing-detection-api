@@ -60,6 +60,7 @@ db = SQLAlchemy(app)
 
 # --- Google Cloud Storage ---
 GCS_KEY_PATH = "/secrets/GCS_KEY"  # Mounted secret path on GCP Cloud Run
+GMAIL_CREDENTIALS_PATH = "/secrets/GMAIL_CREDENTIALS"  # Mounted Gmail credentials JSON
 
 def get_storage_client():
     if Path(GCS_KEY_PATH).exists():
@@ -70,29 +71,15 @@ def get_storage_client():
 secret_client = secretmanager.SecretManagerServiceClient()
 
 def get_secret(secret_name: str, version: str = "latest") -> str:
-    """
-    Access Google Secret Manager secret payload as a string.
-    """
     project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
     if not project_id:
         raise RuntimeError("GOOGLE_CLOUD_PROJECT environment variable not set")
     secret_path = f"projects/{project_id}/secrets/{secret_name}/versions/{version}"
     response = secret_client.access_secret_version(name=secret_path)
-    secret_data = response.payload.data.decode("UTF-8")
-    return secret_data
+    return response.payload.data.decode("UTF-8")
 
-# --- Load credentials.json content from Secret Manager into a temp file ---
-def load_credentials_json():
-    secret_json = get_secret("gmail-oauth-credentials")
-    tmp_cred_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-    tmp_cred_file.write(secret_json.encode('utf-8'))
-    tmp_cred_file.flush()
-    tmp_cred_file.close()
-    logger.info(f"Loaded gmail-oauth-credentials from Secret Manager into {tmp_cred_file.name}")
-    return tmp_cred_file.name
-
-# Load client secrets file path for OAuth flow
-CREDENTIALS_PATH = load_credentials_json()
+# --- Load client secrets file path for OAuth flow ---
+CREDENTIALS_PATH = GMAIL_CREDENTIALS_PATH
 
 # --- Load Phishing Model from GCS ---
 bucket_name = "phishing-model-files"
@@ -150,14 +137,12 @@ with app.app_context():
     db.create_all()
 
 # --- Authentication Utilities ---
-
 def generate_jwt(user_id):
     payload = {
         'user_id': user_id,
         'exp': datetime.utcnow() + timedelta(seconds=JWT_EXP_DELTA_SECONDS)
     }
-    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-    return token
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def verify_jwt(token):
     try:
@@ -177,7 +162,6 @@ def require_auth(f):
         user_id = verify_jwt(token)
         if not user_id:
             return jsonify({"error": "Invalid or expired token"}), 401
-        # Attach user_id to kwargs for route use
         kwargs['user_id'] = user_id
         return f(*args, **kwargs)
     return decorated
@@ -207,7 +191,6 @@ def authorize():
         include_granted_scopes='true',
         state=user_id
     )
-    logger.info(f"Authorization URL generated for user_id={user_id}")
     return redirect(auth_url)
 
 @app.route('/oauth2callback')
@@ -246,15 +229,9 @@ def oauth2callback():
     db.session.commit()
 
     jwt_token = generate_jwt(user_id)
-    logger.info(f"OAuth2 complete and token stored for user_id={user_id}")
-
-    return jsonify({
-        "message": "Authorization complete. You can return to the app.",
-        "jwt_token": jwt_token
-    })
+    return jsonify({"message": "Authorization complete. You can return to the app.", "jwt_token": jwt_token})
 
 # --- Gmail API Utilities ---
-
 def build_gmail_service(user_id):
     gmail_token = GmailToken.query.filter_by(user_id=user_id).first()
     if not gmail_token:
@@ -270,28 +247,22 @@ def build_gmail_service(user_id):
         scopes=creds_data['scopes']
     )
 
-    # Refresh token if expired or close to expiration
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-            # Update stored token
             gmail_token.token['token'] = creds.token
             db.session.commit()
-            logger.info(f"Refreshed Gmail token for user_id={user_id}")
         except Exception as e:
             logger.error(f"Failed to refresh Gmail token: {e}")
             raise
 
-    service = build('gmail', 'v1', credentials=creds)
-    return service
+    return build('gmail', 'v1', credentials=creds)
 
 # --- Phishing Prediction Helper ---
-
 def bert_encode(text):
     with model_lock:
         inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True).to(device)
         outputs = bert_model(**inputs)
-        # Use [CLS] token embedding as sentence embedding
         embedding = outputs.last_hidden_state[:, 0, :].detach().cpu().numpy()
     return embedding
 
@@ -300,11 +271,9 @@ def predict_phishing(subject, snippet):
     embedding = bert_encode(combined_text)
     prediction = model.predict(embedding)
     confidence = np.max(model.predict_proba(embedding))
-    phishing_flag = bool(prediction[0])
-    return phishing_flag, confidence
+    return bool(prediction[0]), confidence
 
 # --- Routes ---
-
 @app.route('/scan_gmail')
 @require_auth
 def scan_gmail(user_id):
@@ -323,55 +292,27 @@ def scan_gmail(user_id):
             headers = msg_data.get('payload', {}).get('headers', [])
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), "")
             snippet = msg_data.get('snippet', "")
-
             phishing, confidence = predict_phishing(subject, snippet)
-
-            scan_results.append({
-                "subject": subject,
-                "snippet": snippet,
-                "phishing": phishing,
-                "confidence": confidence
-            })
-
-            # Store scan result
-            record = EmailScanResult(
-                user_id=user_id,
-                subject=subject,
-                snippet=snippet,
-                phishing=phishing,
-                confidence=confidence
-            )
-            db.session.add(record)
+            scan_results.append({"subject": subject, "snippet": snippet, "phishing": phishing, "confidence": confidence})
+            db.session.add(EmailScanResult(user_id=user_id, subject=subject, snippet=snippet, phishing=phishing, confidence=confidence))
         except Exception as e:
             logger.warning(f"Failed to scan message id={msg['id']}: {e}")
             continue
 
     db.session.commit()
-
     return jsonify({"results": scan_results})
 
-# --- Dashboard stats route example ---
 @app.route('/dashboard_stats')
 @require_auth
 def dashboard_stats(user_id):
-    # Example: count phishing emails scanned for user
     phishing_count = EmailScanResult.query.filter_by(user_id=user_id, phishing=True).count()
     total_count = EmailScanResult.query.filter_by(user_id=user_id).count()
-    return jsonify({
-        "user_id": user_id,
-        "phishing_count": phishing_count,
-        "total_count": total_count
-    })
+    return jsonify({"user_id": user_id, "phishing_count": phishing_count, "total_count": total_count})
 
-# --- Firewall test route ---
 @app.route('/test_firewall')
 def test_firewall():
     test_ip = request.remote_addr or "unknown"
-    if firewall.is_blocked(test_ip):
-        return jsonify({"firewall": "blocked"})
-    else:
-        return jsonify({"firewall": "allowed"})
+    return jsonify({"firewall": "blocked" if firewall.is_blocked(test_ip) else "allowed"})
 
-# --- Main Entry ---
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
