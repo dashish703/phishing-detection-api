@@ -13,6 +13,7 @@
 *.orig
 *.csv
 *.json
+!credentials.json
 logs/
 outputs/
 data/

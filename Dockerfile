@@ -1,8 +1,9 @@
-FROM python:3.10-slim
+# Stage 1: Build and install dependencies
+FROM python:3.10-slim AS base
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,16 +16,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
-# Copy and install dependencies
+# Copy requirements and install dependencies
 COPY requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy project source code
+# Stage 2: Copy app and credentials
+FROM base AS final
+
+# Copy everything including credentials (make sure it's in your .dockerignore exception list if needed)
 COPY . .
+COPY credentials.json ./credentials.json
 
-# Expose port for Gunicorn
+# Expose the app port
 EXPOSE 8080
 
-# Run the application
+# Start app with Gunicorn
 CMD ["gunicorn", "-b", "0.0.0.0:8080", "Real_time_detection:app"]
