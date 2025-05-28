@@ -22,10 +22,12 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 import jwt
+from pyfcm import FCMNotification
 
 # --- Flask Setup ---
 app = Flask(__name__)
-CORS(app)
+# Configure CORS to allow frontend origins (update with your frontend domain)
+CORS(app, resources={r"/*": {"origins": ["https://your-frontend-domain.com", "http://localhost:8080"]}})
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -44,16 +46,21 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 FLASK_SECRET = os.environ.get("FLASK_SECRET")
 if not FLASK_SECRET:
-    logger.warning("FLASK_SECRET env var not set, using insecure default!")
-app.secret_key = FLASK_SECRET or "your-default-insecure-secret"
+    logger.error("FLASK_SECRET environment variable is not set!")
+    raise ValueError("FLASK_SECRET must be set")
+app.secret_key = FLASK_SECRET
 
 JWT_SECRET = os.environ.get("JWT_SECRET")
 if not JWT_SECRET:
-    logger.warning("JWT_SECRET env var not set, using insecure default!")
-JWT_SECRET = JWT_SECRET or "super-secret-jwt-key"
+    logger.error("JWT_SECRET environment variable is not set!")
+    raise ValueError("JWT_SECRET must be set")
 
 JWT_ALGORITHM = 'HS256'
 JWT_EXP_DELTA_SECONDS = 3600
+
+FCM_SERVER_KEY = os.environ.get("FCM_SERVER_KEY")
+if not FCM_SERVER_KEY:
+    logger.warning("FCM_SERVER_KEY not set, push notifications disabled")
 
 # --- Secret Manager ---
 secret_client = secretmanager.SecretManagerServiceClient()
@@ -109,9 +116,9 @@ logger.info("Phishing model loaded successfully.")
 class UserSettings(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.String(80), unique=True, nullable=False)
-    notifications = db.Column(db.JSON, nullable=False)
-    whitelist = db.Column(db.JSON, nullable=False)
-    blacklist = db.Column(db.JSON, nullable=False)
+    notifications = db.Column(db.JSON, nullable=False, default={})
+    whitelist = db.Column(db.JSON, nullable=False, default=[])
+    blacklist = db.Column(db.JSON, nullable=False, default=[])
 
 class EmailScanResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -132,9 +139,37 @@ class Notification(db.Model):
     user_id = db.Column(db.String(80), nullable=False)
     message = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=db.func.now())
+    read = db.Column(db.Boolean, default=False)  # Added read column
+
+class FCMToken(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(80), unique=True, nullable=False)
+    fcm_token = db.Column(db.String(255), nullable=False)
 
 with app.app_context():
     db.create_all()
+
+# --- FCM Push Notifications ---
+push_service = FCMNotification(api_key=FCM_SERVER_KEY) if FCM_SERVER_KEY else None
+
+def send_push_notification(user_id, title, body, data):
+    if not push_service:
+        logger.warning("Push notifications disabled: FCM_SERVER_KEY not set")
+        return
+    fcm_token = FCMToken.query.filter_by(user_id=user_id).first()
+    if not fcm_token:
+        logger.warning(f"No FCM token for user_id: {user_id}")
+        return
+    try:
+        result = push_service.notify_single_device(
+            registration_id=fcm_token.fcm_token,
+            message_title=title,
+            message_body=body,
+            data_message=data
+        )
+        logger.info(f"Push notification sent to user_id {user_id}: {result}")
+    except Exception as e:
+        logger.error(f"Failed to send push notification to user_id {user_id}: {e}")
 
 # --- Auth Helpers ---
 def generate_jwt(user_id):
@@ -173,8 +208,8 @@ REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "https://phishing-backend-6182872
 def authorize():
     user_id = request.args.get('user_id')
     if not user_id:
+        logger.error("Missing user_id in /authorize")
         return jsonify({"error": "Missing user_id"}), 400
-
     try:
         credentials_info = get_gmail_credentials()
         flow = Flow.from_client_config(
@@ -188,6 +223,7 @@ def authorize():
             include_granted_scopes='true',
             state=user_id
         )
+        logger.info(f"OAuth authorization URL generated for user_id: {user_id}")
         return redirect(auth_url)
     except Exception as e:
         logger.error(f"OAuth flow init failed: {e}")
@@ -196,9 +232,10 @@ def authorize():
 @app.route('/oauth2callback')
 def oauth2callback():
     user_id = request.args.get('state')
+    logger.info(f"OAuth callback received for user_id: {user_id}")
     if not user_id:
+        logger.error("Missing state (user_id)")
         return "Missing state (user_id)", 400
-
     try:
         credentials_info = get_gmail_credentials()
         flow = Flow.from_client_config(
@@ -208,7 +245,7 @@ def oauth2callback():
         )
         flow.fetch_token(authorization_response=request.url)
         creds = flow.credentials
-
+        logger.info(f"Access token received for user_id: {user_id}")
         token_data = {
             'token': creds.token,
             'refresh_token': creds.refresh_token,
@@ -217,26 +254,25 @@ def oauth2callback():
             'client_secret': creds.client_secret,
             'scopes': creds.scopes
         }
-
         existing = GmailToken.query.filter_by(user_id=user_id).first()
         if existing:
             existing.token = token_data
         else:
             db.session.add(GmailToken(user_id=user_id, token=token_data))
         db.session.commit()
-
+        logger.info(f"Gmail token saved for user_id: {user_id}")
         jwt_token = generate_jwt(user_id)
         return jsonify({"message": "Authorization complete.", "jwt_token": jwt_token})
     except Exception as e:
-        logger.error(f"OAuth2 callback error: {e}")
+        logger.error(f"OAuth2 callback error for user_id {user_id}: {e}")
         return jsonify({"error": "OAuth2 callback failed"}), 400
 
 # --- Gmail Service ---
 def build_gmail_service(user_id):
     gmail_token = GmailToken.query.filter_by(user_id=user_id).first()
     if not gmail_token:
+        logger.error(f"No Gmail OAuth2 token found for user_id: {user_id}")
         raise ValueError("No Gmail OAuth2 token found for user")
-
     creds_data = gmail_token.token
     creds = Credentials(
         token=creds_data['token'],
@@ -246,17 +282,22 @@ def build_gmail_service(user_id):
         client_secret=creds_data['client_secret'],
         scopes=creds_data['scopes']
     )
-
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
             gmail_token.token['token'] = creds.token
             db.session.commit()
+            logger.info(f"Gmail token refreshed for user_id: {user_id}")
         except Exception as e:
-            logger.error(f"Failed to refresh Gmail token: {e}")
+            logger.error(f"Failed to refresh Gmail token for user_id {user_id}: {e}")
             raise
-
-    return build('gmail', 'v1', credentials=creds)
+    try:
+        service = build('gmail', 'v1', credentials=creds)
+        logger.info(f"Gmail service built for user_id: {user_id}")
+        return service
+    except Exception as e:
+        logger.error(f"Failed to build Gmail service for user_id {user_id}: {e}")
+        raise
 
 # --- BERT Prediction ---
 def bert_encode(text):
@@ -288,47 +329,54 @@ def predict(user_id):
 @require_auth
 def scan_gmail(user_id):
     try:
+        gmail_token = GmailToken.query.filter_by(user_id=user_id).first()
+        if not gmail_token:
+            logger.error(f"No Gmail token found for user_id: {user_id}")
+            return jsonify({"error": "No Gmail OAuth token found"}), 404
         service = build_gmail_service(user_id)
         results = service.users().messages().list(userId='me', maxResults=10).execute()
         messages = results.get('messages', [])
+        scan_results = []
+        for msg in messages:
+            try:
+                msg_data = service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='metadata',
+                    metadataHeaders=['Subject']
+                ).execute()
+                headers = msg_data.get('payload', {}).get('headers', [])
+                subject = next((h['value'] for h in headers if h['name'] == 'Subject'), "")
+                snippet = msg_data.get('snippet', "")
+                phishing, confidence = predict_phishing(subject, snippet)
+                if phishing:
+                    send_push_notification(
+                        user_id=user_id,
+                        title="Phishing Email Detected",
+                        body=f"Subject: {subject}",
+                        data={"emailAddress": "unknown", "emailContent": snippet}
+                    )
+                result = EmailScanResult(
+                    user_id=user_id,
+                    subject=subject,
+                    snippet=snippet,
+                    phishing=phishing,
+                    confidence=confidence
+                )
+                db.session.add(result)
+                scan_results.append({
+                    "subject": subject,
+                    "snippet": snippet,
+                    "phishing": phishing,
+                    "confidence": confidence
+                })
+            except Exception as e:
+                logger.error(f"Failed to scan message {msg.get('id')} for user_id {user_id}: {e}")
+        db.session.commit()
+        return jsonify(scan_results)
     except Exception as e:
-        logger.error(f"Failed to fetch Gmail: {e}")
+        logger.error(f"Failed to fetch Gmail for user_id {user_id}: {e}")
         return jsonify({"error": "Gmail fetch failed"}), 500
-
-    scan_results = []
-    for msg in messages:
-        try:
-            msg_data = service.users().messages().get(
-                userId='me',
-                id=msg['id'],
-                format='metadata',
-                metadataHeaders=['Subject']
-            ).execute()
-            headers = msg_data.get('payload', {}).get('headers', [])
-            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), "")
-            snippet = msg_data.get('snippet', "")
-            phishing, confidence = predict_phishing(subject, snippet)
-
-            result = EmailScanResult(
-                user_id=user_id,
-                subject=subject,
-                snippet=snippet,
-                phishing=phishing,
-                confidence=confidence
-            )
-            db.session.add(result)
-            scan_results.append({
-                "subject": subject,
-                "snippet": snippet,
-                "phishing": phishing,
-                "confidence": confidence
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to scan message {msg.get('id')}: {e}")
-
-    db.session.commit()
-    return jsonify(scan_results)
 
 # --- Dashboard Stats Route ---
 @app.route('/dashboard_stats')
@@ -338,12 +386,76 @@ def dashboard_stats(user_id):
     total_count = EmailScanResult.query.filter_by(user_id=user_id).count()
     return jsonify({"user_id": user_id, "phishing_count": phishing_count, "total_count": total_count})
 
+# --- Email List Management Routes ---
+@app.route('/get_list', methods=['GET'])
+@require_auth
+def get_list(user_id):
+    settings = UserSettings.query.filter_by(user_id=user_id).first()
+    if not settings:
+        settings = UserSettings(user_id=user_id, notifications={}, whitelist=[], blacklist=[])
+        db.session.add(settings)
+        db.session.commit()
+    list_type = request.args.get('listType')
+    if list_type == 'whitelist':
+        return jsonify({"emails": settings.whitelist})
+    elif list_type == 'blacklist':
+        return jsonify({"emails": settings.blacklist})
+    return jsonify({"error": "Invalid list type"}), 400
+
+@app.route('/add_to_list', methods=['POST'])
+@require_auth
+def add_to_list(user_id):
+    data = request.get_json()
+    email = data.get('email')
+    list_type = data.get('listType')
+    if not email or not list_type:
+        return jsonify({"error": "Missing email or listType"}), 400
+    settings = UserSettings.query.filter_by(user_id=user_id).first()
+    if not settings:
+        settings = UserSettings(user_id=user_id, notifications={}, whitelist=[], blacklist=[])
+        db.session.add(settings)
+    if list_type == 'whitelist':
+        settings.whitelist.append({"email": email})
+    elif list_type == 'blacklist':
+        settings.blacklist.append({"email": email})
+    else:
+        return jsonify({"error": "Invalid list type"}), 400
+    db.session.commit()
+    return jsonify({"status": "Email added"})
+
+@app.route('/remove_from_list', methods=['POST'])
+@require_auth
+def remove_from_list(user_id):
+    data = request.get_json()
+    email = data.get('email')
+    list_type = data.get('listType')
+    if not email or not list_type:
+        return jsonify({"error": "Missing email or listType"}), 400
+    settings = UserSettings.query.filter_by(user_id=user_id).first()
+    if not settings:
+        return jsonify({"error": "User settings not found"}), 404
+    if list_type == 'whitelist':
+        settings.whitelist = [e for e in settings.whitelist if e['email'] != email]
+    elif list_type == 'blacklist':
+        settings.blacklist = [e for e in settings.blacklist if e['email'] != email]
+    else:
+        return jsonify({"error": "Invalid list type"}), 400
+    db.session.commit()
+    return jsonify({"status": "Email removed"})
+
 # --- Notification Endpoints ---
 @app.route('/get_notifications')
 @require_auth
 def get_notifications(user_id):
     notifs = Notification.query.filter_by(user_id=user_id).all()
-    return jsonify([{"message": n.message, "timestamp": n.timestamp} for n in notifs])
+    return jsonify([
+        {
+            "id": n.id,
+            "message": n.message,
+            "timestamp": n.timestamp.isoformat(),
+            "read": n.read
+        } for n in notifs
+    ])
 
 @app.route('/submit_notification', methods=['POST'])
 @require_auth
@@ -360,6 +472,51 @@ def delete_notifications(user_id):
     Notification.query.filter_by(user_id=user_id).delete()
     db.session.commit()
     return jsonify({"status": "All notifications deleted"})
+
+@app.route('/notifications/<int:id>/mark_read', methods=['POST'])
+@require_auth
+def mark_notification_read(user_id, id):
+    notification = Notification.query.filter_by(id=id, user_id=user_id).first()
+    if not notification:
+        return jsonify({"error": "Notification not found"}), 404
+    notification.read = True
+    db.session.commit()
+    return jsonify({"status": "Notification marked as read"})
+
+@app.route('/notifications/mark_all_read', methods=['POST'])
+@require_auth
+def mark_all_notifications_read(user_id):
+    notifications = Notification.query.filter_by(user_id=user_id).all()
+    for notif in notifications:
+        notif.read = True
+    db.session.commit()
+    return jsonify({"status": "All notifications marked as read"})
+
+@app.route('/notifications/<int:id>', methods=['DELETE'])
+@require_auth
+def delete_notification(user_id, id):
+    notification = Notification.query.filter_by(id=id, user_id=user_id).first()
+    if not notification:
+        return jsonify({"error": "Notification not found"}), 404
+    db.session.delete(notification)
+    db.session.commit()
+    return jsonify({"status": "Notification deleted"})
+
+# --- FCM Token Registration ---
+@app.route('/register_fcm_token', methods=['POST'])
+@require_auth
+def register_fcm_token(user_id):
+    data = request.get_json()
+    fcm_token = data.get('fcm_token')
+    if not fcm_token:
+        return jsonify({"error": "Missing FCM token"}), 400
+    existing = FCMToken.query.filter_by(user_id=user_id).first()
+    if existing:
+        existing.fcm_token = fcm_token
+    else:
+        db.session.add(FCMToken(user_id=user_id, fcm_token=fcm_token))
+    db.session.commit()
+    return jsonify({"status": "FCM token registered"})
 
 # --- Firewall Test ---
 @app.route('/test_firewall')
