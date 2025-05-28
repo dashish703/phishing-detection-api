@@ -18,13 +18,19 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-# ---------- Stage 2: Copy source ----------
+# ---------- Stage 2: Final image with source ----------
 FROM base AS final
 
 WORKDIR /app
+
+# Copy only application source (excluding secrets via .dockerignore)
 COPY . .
 
-# Secrets are mounted at runtime
+# Environment variables (secret path is injected at runtime in Cloud Run)
+ENV GMAIL_CREDENTIALS_PATH="/secrets/GMAIL_CREDENTIALS"
+
+# Expose port expected by Cloud Run
 EXPOSE 8080
 
+# Start the app using Gunicorn
 CMD ["gunicorn", "-b", "0.0.0.0:8080", "Real_time_detection:app"]

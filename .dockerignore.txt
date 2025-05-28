@@ -33,12 +33,9 @@ runs/
 .env.*
 .envrc
 *.pem
-instance/
-secrets/
-secrets.json
-# Explicitly allow tracked auth credentials if intended
-!credentials.json
-!service_account.json
+secrets/              # Ignore secrets folder
+!credentials.json     # Allow if explicitly intended
+!service_account.json # Allow if explicitly intended
 
 # === Python-related ===
 __pycache__/

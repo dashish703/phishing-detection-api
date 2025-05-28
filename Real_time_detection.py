@@ -14,7 +14,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 from transformers import DistilBertTokenizer, DistilBertModel
-from google.cloud import storage
+from google.cloud import storage, secretmanager
 from firewall import Firewall
 from flask_sqlalchemy import SQLAlchemy
 from google.oauth2.credentials import Credentials
@@ -55,18 +55,26 @@ JWT_SECRET = JWT_SECRET or "super-secret-jwt-key"
 JWT_ALGORITHM = 'HS256'
 JWT_EXP_DELTA_SECONDS = 3600
 
+# --- Secret Manager ---
+secret_client = secretmanager.SecretManagerServiceClient()
+SECRET_NAME = "projects/61828726396/secrets/gmail-oauth-credentials/versions/latest"
+
+def get_gmail_credentials():
+    try:
+        response = secret_client.access_secret_version(name=SECRET_NAME)
+        secret_payload = response.payload.data.decode("UTF-8")
+        credentials = json.loads(secret_payload)
+        return credentials
+    except Exception as e:
+        logger.error(f"Failed to retrieve Gmail OAuth credentials: {e}")
+        raise
+
+# --- DB Init ---
 db = SQLAlchemy(app)
 
 # --- Google Cloud Storage ---
-GCS_KEY_PATH = "/secrets/GCS_KEY"
-GMAIL_CREDENTIALS_PATH = "/secrets/GMAIL_CREDENTIALS"
-
 def get_storage_client():
-    if Path(GCS_KEY_PATH).exists():
-        return storage.Client.from_service_account_json(GCS_KEY_PATH)
     return storage.Client()
-
-CREDENTIALS_PATH = GMAIL_CREDENTIALS_PATH
 
 bucket_name = "phishing-model-files"
 blob_name = "ensemble_phishing_model.pkl"
@@ -162,8 +170,9 @@ def authorize():
         return jsonify({"error": "Missing user_id"}), 400
 
     try:
-        flow = Flow.from_client_secrets_file(
-            CREDENTIALS_PATH,
+        credentials_info = get_gmail_credentials()
+        flow = Flow.from_client_config(
+            credentials_info,
             scopes=SCOPES,
             redirect_uri=REDIRECT_URI
         )
@@ -185,8 +194,9 @@ def oauth2callback():
         return "Missing state (user_id)", 400
 
     try:
-        flow = Flow.from_client_secrets_file(
-            CREDENTIALS_PATH,
+        credentials_info = get_gmail_credentials()
+        flow = Flow.from_client_config(
+            credentials_info,
             scopes=SCOPES,
             redirect_uri=REDIRECT_URI
         )
