@@ -127,6 +127,12 @@ class GmailToken(db.Model):
     user_id = db.Column(db.String(80), unique=True, nullable=False)
     token = db.Column(db.JSON, nullable=False)
 
+class Notification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(80), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=db.func.now())
+
 with app.app_context():
     db.create_all()
 
@@ -160,7 +166,7 @@ def require_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- OAuth ---
+# --- OAuth Routes ---
 REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "https://phishing-backend-61828726396.us-west1.run.app/oauth2callback")
 
 @app.route('/authorize')
@@ -267,7 +273,17 @@ def predict_phishing(subject, snippet):
     confidence = np.max(model.predict_proba(embedding))
     return bool(prediction[0]), confidence
 
-# --- Routes ---
+# --- Prediction Endpoint ---
+@app.route('/predict', methods=['POST'])
+@require_auth
+def predict(user_id):
+    data = request.get_json()
+    subject = data.get("subject", "")
+    snippet = data.get("snippet", "")
+    phishing, confidence = predict_phishing(subject, snippet)
+    return jsonify({"phishing": phishing, "confidence": confidence})
+
+# --- Gmail Scan Route ---
 @app.route('/scan_gmail')
 @require_auth
 def scan_gmail(user_id):
@@ -282,20 +298,39 @@ def scan_gmail(user_id):
     scan_results = []
     for msg in messages:
         try:
-            msg_data = service.users().messages().get(userId='me', id=msg['id'], format='metadata', metadataHeaders=['Subject']).execute()
+            msg_data = service.users().messages().get(
+                userId='me',
+                id=msg['id'],
+                format='metadata',
+                metadataHeaders=['Subject']
+            ).execute()
             headers = msg_data.get('payload', {}).get('headers', [])
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), "")
             snippet = msg_data.get('snippet', "")
             phishing, confidence = predict_phishing(subject, snippet)
-            scan_results.append({"subject": subject, "snippet": snippet, "phishing": phishing, "confidence": confidence})
-            db.session.add(EmailScanResult(user_id=user_id, subject=subject, snippet=snippet, phishing=phishing, confidence=confidence))
+
+            result = EmailScanResult(
+                user_id=user_id,
+                subject=subject,
+                snippet=snippet,
+                phishing=phishing,
+                confidence=confidence
+            )
+            db.session.add(result)
+            scan_results.append({
+                "subject": subject,
+                "snippet": snippet,
+                "phishing": phishing,
+                "confidence": confidence
+            })
+
         except Exception as e:
-            logger.warning(f"Scan failed for message ID {msg['id']}: {e}")
-            continue
+            logger.error(f"Failed to scan message {msg.get('id')}: {e}")
 
     db.session.commit()
-    return jsonify({"results": scan_results})
+    return jsonify(scan_results)
 
+# --- Dashboard Stats Route ---
 @app.route('/dashboard_stats')
 @require_auth
 def dashboard_stats(user_id):
@@ -303,10 +338,35 @@ def dashboard_stats(user_id):
     total_count = EmailScanResult.query.filter_by(user_id=user_id).count()
     return jsonify({"user_id": user_id, "phishing_count": phishing_count, "total_count": total_count})
 
+# --- Notification Endpoints ---
+@app.route('/get_notifications')
+@require_auth
+def get_notifications(user_id):
+    notifs = Notification.query.filter_by(user_id=user_id).all()
+    return jsonify([{"message": n.message, "timestamp": n.timestamp} for n in notifs])
+
+@app.route('/submit_notification', methods=['POST'])
+@require_auth
+def submit_notification(user_id):
+    data = request.get_json()
+    message = data.get("message")
+    db.session.add(Notification(user_id=user_id, message=message))
+    db.session.commit()
+    return jsonify({"status": "Notification saved"})
+
+@app.route('/delete_notifications', methods=['DELETE'])
+@require_auth
+def delete_notifications(user_id):
+    Notification.query.filter_by(user_id=user_id).delete()
+    db.session.commit()
+    return jsonify({"status": "All notifications deleted"})
+
+# --- Firewall Test ---
 @app.route('/test_firewall')
 def test_firewall():
     test_ip = request.remote_addr or "unknown"
     return jsonify({"firewall": "blocked" if firewall.is_blocked(test_ip) else "allowed"})
 
-if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+# --- App Run ---
+if __name__ == '__main__':
+    app.run(debug=True)
