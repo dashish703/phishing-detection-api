@@ -11,7 +11,7 @@ steps:
         '.'
       ]
 
-  # Step 2: Push both tags
+  # Step 2: Push SHA-tagged Docker image
   - name: 'gcr.io/cloud-builders/docker'
     id: 'Push Docker Image - SHA'
     args:
@@ -20,6 +20,7 @@ steps:
         'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:$SHORT_SHA'
       ]
 
+  # Step 3: Push "latest" Docker tag
   - name: 'gcr.io/cloud-builders/docker'
     id: 'Push Docker Image - Latest'
     args:
@@ -28,7 +29,7 @@ steps:
         'us-west1-docker.pkg.dev/phishing-detection-450717/phishing-detection-backend/phishing-backend:latest'
       ]
 
-  # Step 3: Deploy to Cloud Run using SHA-tagged image and Gmail secret
+  # Step 4: Deploy to Cloud Run using SHA-tagged image and mounted Gmail credentials
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Deploy to Cloud Run'
     entrypoint: 'gcloud'
@@ -44,8 +45,7 @@ steps:
         '--cpu', '2',
         '--max-instances', '5',
         '--service-account', 'model-accessor@phishing-detection-450717.iam.gserviceaccount.com',
-        '--set-secrets',
-        'GMAIL_CREDENTIALS=gmail-oauth-credentials:latest'
+        '--set-secrets', 'GMAIL_CREDENTIALS=gmail-oauth-credentials:latest'
       ]
 
 images:
